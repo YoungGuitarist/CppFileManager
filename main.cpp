@@ -14,12 +14,12 @@ using namespace std;
 using namespace ftxui;
 namespace fs = std::filesystem;
 
-// Global params
+// Глобальные параметры
 fs::path CURRENT_PATH = "/home/vlad/code/cpp/CppFileManager";
 int WIDTH_SIZE = 45;
 
-// Items func return vector of items in current Dir
-vector<string> Items() {
+// Функция возвращает вектор элементов в текущей директории
+vector<string> GetItems() {
   vector<string> output;
 
   for (auto &item : fs::directory_iterator(CURRENT_PATH)) {
@@ -37,19 +37,30 @@ vector<string> Items() {
   return output;
 }
 
-// Returns vbox type element that shows data about selected element
-Element GetInfoAboutFile(int &selected) {
-
+// Возвращает информацию о выбранном файле
+Element GetInfoAboutFile(int selected) {
   vector<fs::path> items;
   for (auto &item : fs::directory_iterator(CURRENT_PATH)) {
     items.push_back(item);
+  }
+
+  if (items.empty()) {
+    return vbox(text("Нет файлов в директории"));
+  }
+
+  // Проверка границ выбранного элемента
+  if (selected >= items.size()) {
+    selected = items.size() - 1;
+  }
+  if (selected < 0) {
+    selected = 0;
   }
 
   string name = items[selected].filename().string();
   string size;
 
   if (!fs::is_regular_file(items[selected])) {
-    size = "-- it`s directory --";
+    size = "-- это директория --";
   } else {
     uintmax_t rawSize = fs::file_size(items[selected]);
     if (rawSize < 1024) {
@@ -63,30 +74,80 @@ Element GetInfoAboutFile(int &selected) {
     }
   }
 
-  auto output = vbox(text("Name: " + name), separator(), text("Size: " + size));
-  return output;
+  return vbox(text("Имя: " + name), separator(), text("Размер: " + size));
 }
 
 int main(int argc, char *argv[]) {
-
   cout << "\033[2J\033[H";
 
+  string input_text;
+  string active_window = "main";
+
   auto screen = ScreenInteractive::TerminalOutput();
-
   int selected = 0;
-  auto menu = Menu(Items(), &selected);
+  vector<string> items = GetItems();
 
-  auto render = Renderer(menu, [&] {
-    auto name = hbox(text("FILE MAN 0.1")) | hcenter | border;
+  // Создаем компоненты
+  auto menu = Menu(&items, &selected);
+  auto searchInput =
+      Input(&input_text, "Введите путь...") | center | border | flex;
 
-    auto PathBar = window(text("Current Path"), text(CURRENT_PATH));
-
-    auto left_side = hbox(text("Files"), separator(), menu->Render()) |
-                     size(WIDTH, EQUAL, WIDTH_SIZE) | border;
-    auto right_side = window(text("Info"), GetInfoAboutFile(selected)) | flex;
-
-    return vbox({name, PathBar, hbox({left_side, right_side | flex})});
+  // Контейнер для компонентов
+  auto components = Container::Vertical({
+      menu,
+      searchInput,
   });
 
-  screen.Loop(render);
+  auto render = Renderer(components, [&] {
+    // Глобальные элементы
+    auto name = hbox(text("ФАЙЛОВЫЙ МЕНЕДЖЕР 0.1")) | hcenter | border;
+    auto PathBar = window(text("Текущий путь"), text(CURRENT_PATH));
+
+    // Основной экран
+    auto left_side =
+        hbox(text("Файлы"), separator(),
+             menu->Render() | frame | size(HEIGHT, LESS_THAN, 15)) |
+        size(WIDTH, EQUAL, WIDTH_SIZE) | border;
+    auto right_side =
+        window(text("Информация"), GetInfoAboutFile(selected)) | flex;
+    auto MainScreen =
+        vbox({name, PathBar, hbox({left_side, right_side | flex})});
+
+    // Экран смены пути
+    auto inputPlace =
+        hbox(text("Введите путь: ") | vcenter, searchInput->Render()) | center;
+    auto ChangePathScreen = vbox({name, PathBar, inputPlace});
+
+    if (active_window == "main") {
+      return MainScreen;
+    } else if (active_window == "find") {
+      return ChangePathScreen;
+    }
+    return vbox(text("Ошибка")) | center;
+  });
+
+  auto component = CatchEvent(render, [&](Event e) {
+    if (e == Event::Escape && active_window == "main") {
+      screen.Exit();
+      return true;
+    } else if (e == Event::Escape) {
+      screen.Post([&] { menu->TakeFocus(); });
+      selected = 1;
+      active_window = "main";
+    } else if (e == Event::Character('f')) {
+      active_window = "find";
+      screen.Post([&] { searchInput->TakeFocus(); });
+    } else if (e == Event::Return && active_window == "find") {
+      CURRENT_PATH = input_text;
+      input_text.clear();
+      active_window = "main";
+      items = GetItems();
+      selected = 0;
+      input_text.clear();
+      return true;
+    }
+    return false;
+  });
+
+  screen.Loop(component);
 }
